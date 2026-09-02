@@ -55,11 +55,14 @@ first**.
 ### 1. Install Codex CLI
 
 Follow OpenAI's current instructions at <https://developers.openai.com/codex>.
-Confirm it works standalone before wiring anything together:
+On macOS, Homebrew has it:
 
 ```sh
+brew install codex
 codex --version
 ```
+
+Confirm it works standalone before wiring anything together.
 
 You need the current Rust-based Codex CLI — the `mcp-server` mode below doesn't
 exist in the older builds.
@@ -104,6 +107,18 @@ claude mcp list
 Codex should appear and report as connected. Inside a session, `/mcp` shows what
 tools are actually available.
 
+**"Connected" does not mean "working."** The MCP server starts fine whether or
+not you are logged in — it is the tool *calls* that would fail. Check the login
+separately, and prove the whole path end to end before trusting it:
+
+```sh
+codex login status
+codex exec --skip-git-repo-check "Reply with exactly: codex ok"
+```
+
+Also note that a session already running when you registered the server will not
+see it. Restart Claude Code, then check `/mcp`.
+
 If it fails, the cause is almost always one of three things: `codex` isn't on
 your PATH for the shell Claude Code launched from, you aren't logged in, or your
 Codex CLI predates `mcp-server`. Run `codex --version` and `codex` on its own to
@@ -114,6 +129,43 @@ isolate which.
 > can't be reached by a Linux-side Claude Code.
 
 ---
+
+## How you actually invoke it
+
+There is no mode to switch into and no flag. You ask, in a normal sentence, and
+Claude calls the tool:
+
+> Ask Codex whether this refill logic drops a frame when the buffer wraps.
+> Get a second opinion from Codex on `src/transfer.rs` before we commit.
+
+The registration exposes exactly two tools — `codex`, which starts a session,
+and `codex-reply`, which continues one. The `codex` tool takes a `prompt`, a
+`cwd`, an optional `model`, and a `sandbox` of `read-only`, `workspace-write`
+or `danger-full-access`. **For review work, insist on `read-only`.** There is no
+reason to let a second vendor's agent write to your tree, and it removes the
+"both agents edited the same files" failure listed below by construction.
+
+### The thing that decides whether this is useful
+
+**Codex starts cold.** It does not see your conversation with Claude, your
+`CLAUDE.md`, or the decision you made four messages ago. It gets one prompt.
+
+So the prompt has to stand alone — the file path, the actual question, the
+constraint that matters:
+
+> In `src/transfer.rs`, `send_chunk` assumes the device ACKs within 50ms. Does
+> anything in this file mishandle a late ACK that arrives after a retry was
+> already sent? Read-only; don't propose refactors.
+
+Ask for "a review of this" instead and you get generic lint-flavoured output,
+because generic is all a cold model can produce from a vague prompt. This is the
+single most common reason people set Codex up, try it twice, and never use it
+again. It reads as "the second agent isn't very good." It is actually "the
+second agent was told nothing."
+
+Tell Claude to send self-contained prompts, and to report both what Codex said
+*and* whether it agrees. A second opinion you adopt automatically is not a
+second opinion.
 
 ## Using it well
 
@@ -145,6 +197,48 @@ codebase neither you nor Claude has seen before.
 behaviour or a library detail with more confidence than the situation warrants,
 a second model is a cheap check. Not proof — both can be wrong the same way —
 but two independent wrongs are rarer than one.
+
+### Making it a habit, which is the hard part
+
+Setting this up takes ten minutes. Actually using it is the part that fails —
+it is entirely normal to be logged in for weeks and never once reach for it.
+
+The reason is that "get a second opinion" is a vague virtue, and vague virtues
+lose to momentum every time. You are mid-task, you have an answer in front of
+you, and stopping to consult a second agent feels like a detour. It never wins
+that argument on the day.
+
+The fix is to stop making it a judgement call. Name the triggers in advance, in
+a file the agent reads every session, so it fires as a rule:
+
+1. **Before a commit touching a path that has burned you before.** Name the
+   paths in the project's handoff notes. Not "important code" — actual paths.
+2. **When Claude has already been wrong once in this session.** It contradicted
+   itself, or a fix didn't work. This is the highest-value moment and the one
+   you will never think of unprompted.
+3. **When you disagree with Claude and don't have time to adjudicate.** A third
+   position breaks a tie better than the same agent restating its own.
+4. **Reading unfamiliar upstream code.** Low stakes, and it calibrates you on
+   whether Codex is any good at your kind of problem before you rely on it.
+
+Not worth the hop: anything a test would settle faster, style questions, and
+anything where you would happily accept either answer.
+
+Putting that in your global `CLAUDE.md` is what turns it from an intention into
+behaviour:
+
+```markdown
+## Second opinion (Codex)
+
+Codex CLI is registered as an MCP server. Reach for it when: you have already
+been wrong once this session, I disagree with you and don't want to adjudicate,
+or a commit touches a path the project's handoff notes call fragile.
+
+Codex starts cold — it sees nothing of our conversation. Send self-contained
+prompts: file path, the specific question, the constraint. Default to
+`sandbox: read-only`. Report what it said *and* whether you agree; never adopt
+its answer just because it is a second voice.
+```
 
 ### What not to do
 
@@ -182,10 +276,14 @@ context and buys you nothing.
 
 ## Where this sits in the setup
 
-`claude-config` syncs your MCP configuration along with everything else, so
-registering Codex once makes it available on your other machine too — assuming
-Codex CLI is installed there and logged in. `bootstrap.sh` doesn't install it;
-that's a per-machine step, like Claude Code itself.
+Registering Codex is a **per-machine step**, and so is installing the CLI.
+`claude mcp add --scope user` writes to `~/.claude.json`, which `claude-config`
+deliberately does not sync — that file also holds session state that is
+meaningless on the other machine. `bootstrap.sh` doesn't install Codex either.
+So on the second machine you run all of steps 1-4 again.
+
+A `--scope project` registration is different: it lands in the project's
+`.mcp.json`, which is in the repo, so that one does travel.
 
 If you write anything project-specific about when to use the second agent, it
 belongs in that project's `CLAUDE.md` under a rule Claude reads every session:
@@ -205,8 +303,11 @@ remembered.
 
 - Use it if you already have institutional Codex access; don't buy it for this
 - The value is **independent review**, not extra throughput
-- Register once: `claude mcp add --transport stdio --scope user codex -- codex mcp-server`
+- Register per machine: `claude mcp add --transport stdio --scope user codex -- codex mcp-server`
+- Invoke it by asking in plain language; use `sandbox: read-only` for review
+- **Codex starts cold** — self-contained prompts, or the answers are worthless
 - Ask it to critique, not to duplicate
+- Name the triggers in your `CLAUDE.md`, or you will never actually use it
 - Delegation costs context — spend it where a second perspective actually pays
 - You're still the manager. Two engineers is a bigger management job, not a
   smaller one
