@@ -1,0 +1,30 @@
+# path-map.tsv — where the workspace lives on each machine.
+#
+# TAB-separated:  COMPUTER-NAME <TAB> WORKSPACE-ROOT
+#
+# COMPUTER-NAME is this machine's name, or "*" for the default. It is resolved as
+# `scutil --get ComputerName` on macOS, falling back to `hostname -s` on Linux and
+# WSL2 — run whichever applies and copy the answer exactly. First an exact match,
+# then "*", then $HOME/dev. $CLAUDE_WORKSPACE_ROOT overrides everything. $HOME and
+# a leading ~ are expanded.
+#
+# PUT A CUSTOM ROOT ON A MACHINE-NAME ROW, NEVER ON "*".
+#
+# This file syncs, so a "*" row naming one machine's custom location becomes every
+# machine's — and a machine then hunts for its memory inside a path that belongs to
+# a different computer. Rows whose directory does not exist here are skipped for
+# exactly that reason, so the mistake degrades to "falls back to $HOME/dev" rather
+# than "silently finds nothing". Do not rely on that; keep "*" generic.
+#
+# Memory directories are named by their path RELATIVE to this root, so both
+# machines agree on `memory/robotics-armctl` even if the roots differ. Identical
+# paths on both machines remain the recommended setup — this only means a machine
+# that cannot manage it no longer silently loses its memory.
+#
+# If every machine keeps its workspace at ~/dev, the default row below is all you
+# need. Add a machine-specific row only when one of them cannot — a Mac and a
+# Linux box, for instance, cannot share an absolute path at all, because their
+# home directories live under /Users and /home respectively. That case is handled:
+# memory is named relative to the root, so both still agree.
+
+*	$HOME/dev
